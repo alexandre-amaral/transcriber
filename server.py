@@ -1,6 +1,7 @@
 """Transcriber — local transcription server (Whisper turbo via MLX).
 
-Inputs: file upload, YouTube links and real-time microphone.
+Inputs: file upload, YouTube links, real-time microphone and system audio
+(via a virtual audio device such as BlackHole).
 Usage: python server.py [--host 127.0.0.1] [--port 7100]
 """
 
@@ -8,8 +9,8 @@ import argparse
 import asyncio
 import json
 import os
+import re
 import subprocess
-import sys
 import threading
 import uuid
 from pathlib import Path
@@ -25,6 +26,7 @@ TMP_DIR.mkdir(exist_ok=True)
 
 MODEL_REPO = os.environ.get("TRANSCRIBER_MODEL", "mlx-community/whisper-large-v3-turbo")
 SAMPLE_RATE = 16000
+BLACKHOLE_NAME = "BlackHole 2ch"
 
 app = FastAPI(title="Transcriber")
 
@@ -73,6 +75,29 @@ def _run_transcribe(audio, language=None, word_timestamps=False):
     if language and language != "auto":
         opts["language"] = language
     return mlx_whisper.transcribe(audio, **opts)
+
+
+# ---------------------------------------------------------------- devices ---
+
+@app.get("/api/audio-devices")
+async def audio_devices():
+    """List avfoundation audio input devices and flag BlackHole."""
+    proc = await asyncio.to_thread(
+        subprocess.run,
+        ["ffmpeg", "-hide_banner", "-f", "avfoundation", "-list_devices", "true", "-i", ""],
+        capture_output=True, text=True, timeout=15,
+    )
+    names = re.findall(r"\[AVFoundation indev @ [^\]]+\] \[\d+\] (.+)", proc.stderr)
+    return {"devices": names, "blackhole": any("blackhole" in n.lower() for n in names)}
+
+
+def _spawn_capture(device: str) -> subprocess.Popen:
+    """Capture an avfoundation audio device as 16 kHz mono float32 PCM."""
+    return subprocess.Popen(
+        ["ffmpeg", "-v", "error", "-f", "avfoundation", "-i", f":{device}",
+         "-f", "f32le", "-ac", "1", "-ar", str(SAMPLE_RATE), "pipe:1"],
+        stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
 
 
 # -------------------------------------------------------------------- srt ---
@@ -182,21 +207,71 @@ def _dedupe_overlap(prev_words, new_words, max_k=6):
 async def live_ws(ws: WebSocket):
     await ws.accept()
     language = ws.query_params.get("language", "auto")
+    source = ws.query_params.get("source", "mic")  # mic | system | both
 
-    session = TMP_DIR / f"live-{uuid.uuid4().hex}.webm"
     state = {
         "processed_samples": 0,
         "confirmed_words": [],
         "running": True,
         "lock": asyncio.Lock(),
-        "file": open(session, "wb"),
+        "file": None,          # browser mic mode: webm accumulator
         "bytes": 0,
+        "buffers": [],         # device modes: one bytearray per capture
+        "procs": [],
     }
+
+    async def _reader(proc: subprocess.Popen, buf: bytearray):
+        while state["running"]:
+            chunk = await asyncio.to_thread(proc.stdout.read1, 65536)
+            if not chunk:
+                break
+            buf.extend(chunk)
+
+    if source in ("system", "both"):
+        devices = [BLACKHOLE_NAME]
+        if source == "both":
+            devices.append("default")  # default input = microphone
+        try:
+            procs = [(dev, _spawn_capture(dev)) for dev in devices]
+        except FileNotFoundError:
+            await ws.send_json({"type": "error", "text": "ffmpeg not found."})
+            await ws.close()
+            return
+        await asyncio.sleep(0.5)  # let ffmpeg fail if the device is missing
+        for dev, proc in procs:
+            if proc.poll() is not None:
+                for _, p in procs:
+                    p.terminate()
+                await ws.send_json({"type": "error", "text": f"Could not capture device '{dev}'. Is BlackHole installed?"})
+                await ws.close()
+                return
+        for dev, proc in procs:
+            buf = bytearray()
+            state["buffers"].append(buf)
+            state["procs"].append(proc)
+            asyncio.create_task(_reader(proc, buf))
+    else:
+        session = TMP_DIR / f"live-{uuid.uuid4().hex}.webm"
+        state["file"] = open(session, "wb")
+
+    def _current_pcm() -> np.ndarray:
+        if state["buffers"]:
+            arrays = []
+            for buf in state["buffers"]:
+                n = (len(buf) // 4) * 4
+                arrays.append(np.frombuffer(bytes(buf[:n]), dtype=np.float32))
+            n = min(len(a) for a in arrays)
+            if n == 0:
+                return np.zeros(0, dtype=np.float32)
+            mix = np.mean([a[:n] for a in arrays], axis=0)
+            return mix.astype(np.float32)
+        return _decode_webm_to_pcm(session)
 
     async def process(final=False):
         async with state["lock"]:
-            state["file"].flush()
-            pcm = await asyncio.to_thread(_decode_webm_to_pcm, session)
+            if state["file"]:
+                state["file"].flush()
+            pcm = await asyncio.to_thread(_current_pcm)
             total = len(pcm)
             new_samples = total - state["processed_samples"]
             if new_samples < int(MIN_WINDOW_S * SAMPLE_RATE) and not final:
@@ -243,7 +318,7 @@ async def live_ws(ws: WebSocket):
         try:
             while state["running"]:
                 await asyncio.sleep(POLL_S)
-                if state["bytes"] > 0:
+                if state["buffers"] or state["bytes"] > 0:
                     await process(final=False)
         except Exception:  # noqa: BLE001
             pass
@@ -252,7 +327,7 @@ async def live_ws(ws: WebSocket):
     try:
         while True:
             msg = await ws.receive()
-            if msg.get("bytes") is not None:
+            if msg.get("bytes") is not None and state["file"]:
                 state["file"].write(msg["bytes"])
                 state["bytes"] += len(msg["bytes"])
             elif msg.get("text"):
@@ -267,8 +342,11 @@ async def live_ws(ws: WebSocket):
     finally:
         state["running"] = False
         tick_task.cancel()
-        state["file"].close()
-        session.unlink(missing_ok=True)
+        for proc in state["procs"]:
+            proc.terminate()
+        if state["file"]:
+            state["file"].close()
+            session.unlink(missing_ok=True)
 
 
 # ----------------------------------------------------------------- static ---

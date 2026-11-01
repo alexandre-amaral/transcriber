@@ -223,6 +223,14 @@
     <div class="card" id="liveCard">
       <div class="row" style="align-items:flex-end">
         <div>
+          <label>Source</label>
+          <select id="liveSource">
+            <option value="system">System audio</option>
+            <option value="both">System audio + microphone</option>
+            <option value="mic">Microphone</option>
+          </select>
+        </div>
+        <div>
           <label>Language</label>
           <select id="liveLang">
             <option value="pt">Portuguese</option>
@@ -238,7 +246,7 @@
           <button class="btn danger" id="liveStopBtn" style="display:none">Stop</button>
         </div>
       </div>
-      <p class="hint">Captures the microphone in real time. To record <strong>meetings</strong> (system audio + microphone), install <code>BlackHole</code> (<code>brew install blackhole-2ch</code>) and create an aggregate device in “Audio MIDI Setup”.</p>
+      <p class="hint"><strong>System audio</strong> captures everything playing on the Mac (meetings, videos, calls) directly from the device — no microphone involved. It requires <code>BlackHole</code>: run <code>brew install --cask blackhole-2ch</code>, then in “Audio MIDI Setup” create a <em>Multi-Output Device</em> with your speakers + BlackHole and select it as the system output, so you keep hearing the audio while it is captured.</p>
     </div>
     <div class="card result" id="liveResult" style="display:none">
       <div class="meta">
@@ -374,10 +382,24 @@ function fmtTime(s) {
 }
 
 $("liveStartBtn").addEventListener("click", async () => {
+  const source = $("liveSource").value;
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    if (source !== "mic") {
+      const r = await fetch("/api/audio-devices");
+      const d = await r.json();
+      if (!d.blackhole) {
+        showError("BlackHole is not installed. Run: brew install --cask blackhole-2ch (it will ask for your password), then restart the server.");
+        return;
+      }
+    }
+
+    let stream = null;
+    if (source === "mic") {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    }
+
     const proto = location.protocol === "https:" ? "wss" : "ws";
-    liveWs = new WebSocket(`${proto}://${location.host}/ws/live?language=${$("liveLang").value}`);
+    liveWs = new WebSocket(`${proto}://${location.host}/ws/live?language=${$("liveLang").value}&source=${source}`);
     liveText = "";
     $("liveOut").value = "";
     $("liveResult").style.display = "block";
@@ -389,6 +411,9 @@ $("liveStartBtn").addEventListener("click", async () => {
         $("liveOut").value = liveText;
         $("liveOut").scrollTop = $("liveOut").scrollHeight;
         $("liveTxt").href = URL.createObjectURL(new Blob([liveText], { type: "text/plain" }));
+      } else if (msg.type === "error") {
+        showError(msg.text);
+        stopLive();
       }
     };
 
@@ -397,11 +422,13 @@ $("liveStartBtn").addEventListener("click", async () => {
       liveWs.onerror = () => rej(new Error("WebSocket connection failed"));
     });
 
-    mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0 && liveWs.readyState === WebSocket.OPEN) liveWs.send(e.data);
-    };
-    mediaRecorder.start(500);
+    if (stream) {
+      mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+      mediaRecorder.ondataavailable = (e) => {
+        if (e.data.size > 0 && liveWs.readyState === WebSocket.OPEN) liveWs.send(e.data);
+      };
+      mediaRecorder.start(500);
+    }
 
     liveStart = Date.now();
     timerInt = setInterval(() => $("liveTimer").textContent = fmtTime((Date.now() - liveStart) / 1000), 500);
@@ -409,19 +436,22 @@ $("liveStartBtn").addEventListener("click", async () => {
     $("liveStartBtn").style.display = "none";
     $("liveStopBtn").style.display = "inline-flex";
   } catch (e) {
-    showError(e.message || "Could not access the microphone.");
+    showError(e.message || "Could not start recording.");
   }
 });
 
-$("liveStopBtn").addEventListener("click", () => {
+function stopLive() {
   if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
   mediaRecorder?.stream.getTracks().forEach(t => t.stop());
+  mediaRecorder = null;
   if (liveWs && liveWs.readyState === WebSocket.OPEN) liveWs.send(JSON.stringify({ type: "stop" }));
   clearInterval(timerInt);
   $("liveCard").classList.remove("recording");
   $("liveStartBtn").style.display = "inline-flex";
   $("liveStopBtn").style.display = "none";
-});
+}
+
+$("liveStopBtn").addEventListener("click", stopLive);
 </script>
 </body>
 </html>

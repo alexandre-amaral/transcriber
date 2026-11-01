@@ -7,7 +7,7 @@ No cloud, no API keys — audio never leaves your machine.
 
 - File upload — drag and drop any audio/video file (mp3, wav, m4a, mp4, mkv…)
 - YouTube — paste a link, audio is extracted with yt-dlp and transcribed
-- Real time — live microphone transcription over WebSocket
+- Real time — live transcription of the microphone, the system audio, or both
 - 99 languages with automatic detection (Whisper large-v3-turbo)
 - Export as `.txt` and `.srt`
 - Runs on GPU via MLX/Metal — roughly 20–30x real time on an M5
@@ -59,16 +59,19 @@ top of the page shows when it is ready.
 
 - **File** — drop a file, pick a language (or auto-detect), transcribe, download `.txt`/`.srt`.
 - **YouTube** — paste a video URL and transcribe. Works with any yt-dlp supported link.
-- **Live** — start recording and speak; text appears in ~4-second windows.
+- **Live** — pick a source and start recording; text appears in ~4-second windows.
+  - *Microphone* — captured in the browser.
+  - *System audio* — everything playing on the Mac (meetings, calls, videos),
+    captured directly from the device via BlackHole. Requires:
 
-To capture meetings (your mic plus other participants' audio):
+    ```bash
+    brew install --cask blackhole-2ch
+    ```
 
-```bash
-brew install blackhole-2ch
-```
-
-Then open macOS **Audio MIDI Setup**, create an aggregate device combining your
-microphone and BlackHole, and select it as the input device.
+    Then open macOS **Audio MIDI Setup**, create a **Multi-Output Device** with
+    your speakers + BlackHole 2ch and select it as the system output, so you
+    keep hearing the audio while it is captured.
+  - *System audio + microphone* — both sources mixed server-side.
 
 ## Configuration
 
@@ -79,11 +82,12 @@ microphone and BlackHole, and select it as the input device.
 
 ## How live mode works
 
-The browser captures the microphone with `MediaRecorder` (webm/opus) and streams
-chunks over a WebSocket. The server decodes the accumulated stream to 16 kHz PCM
-with ffmpeg and transcribes ~4-second windows with 0.5 s of overlap, removing
-duplicated words at window boundaries. The model stays loaded in memory between
-windows, so latency stays low.
+Microphone mode streams webm/opus chunks from the browser over a WebSocket.
+System audio mode captures the BlackHole device (and optionally the default
+microphone) server-side with `ffmpeg -f avfoundation`, mixing both into 16 kHz
+PCM. Either way, the server transcribes ~4-second windows with 0.5 s of overlap,
+removing duplicated words at window boundaries. The model stays loaded in memory
+between windows, so latency stays low.
 
 ## Project layout
 
