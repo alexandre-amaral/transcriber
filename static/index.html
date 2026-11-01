@@ -1,0 +1,427 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Transcriber — transcrição local</title>
+<style>
+  :root {
+    --bg: #0e1116;
+    --panel: #161b22;
+    --panel-2: #1c232d;
+    --border: #2a323d;
+    --text: #e6e9ee;
+    --muted: #8b949e;
+    --accent: #4f8ef7;
+    --accent-2: #3a6fd8;
+    --green: #3fb950;
+    --red: #f85149;
+    --radius: 12px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px 64px;
+  }
+  header { text-align: center; margin-bottom: 28px; }
+  header h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.5px; }
+  header p { color: var(--muted); margin-top: 6px; font-size: 14px; }
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px;
+    margin-top: 14px; padding: 6px 14px; border-radius: 999px;
+    background: var(--panel); border: 1px solid var(--border);
+    font-size: 12.5px; color: var(--muted);
+  }
+  .pill .dot { width: 8px; height: 8px; border-radius: 50%; background: #d29922; }
+  .pill.ready .dot { background: var(--green); }
+  .pill.error .dot { background: var(--red); }
+  .pill.ready { color: var(--green); }
+  .pill.error { color: var(--red); }
+
+  .app { width: 100%; max-width: 780px; }
+  .tabs { display: flex; gap: 6px; background: var(--panel); border: 1px solid var(--border);
+          padding: 5px; border-radius: var(--radius); margin-bottom: 18px; }
+  .tab {
+    flex: 1; text-align: center; padding: 10px 0; border-radius: 8px; cursor: pointer;
+    color: var(--muted); font-size: 14px; font-weight: 500; border: none; background: transparent;
+    transition: background .15s, color .15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { background: var(--panel-2); color: var(--text); }
+
+  .pane { display: none; }
+  .pane.active { display: block; }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--border);
+    border-radius: var(--radius); padding: 22px; margin-bottom: 18px;
+  }
+  .card label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 8px; }
+
+  select, input[type="text"], input[type="url"] {
+    width: 100%; padding: 11px 14px; border-radius: 8px;
+    background: var(--panel-2); border: 1px solid var(--border);
+    color: var(--text); font-size: 14px; outline: none;
+  }
+  select:focus, input:focus { border-color: var(--accent); }
+
+  .dropzone {
+    border: 2px dashed var(--border); border-radius: var(--radius);
+    padding: 40px 20px; text-align: center; cursor: pointer;
+    color: var(--muted); transition: border-color .15s, background .15s;
+  }
+  .dropzone:hover, .dropzone.drag { border-color: var(--accent); background: rgba(79,142,247,.06); }
+  .dropzone .filename { color: var(--text); font-weight: 600; margin-top: 6px; word-break: break-all; }
+
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center; gap: 8px;
+    padding: 12px 22px; border-radius: 8px; border: none; cursor: pointer;
+    background: var(--accent); color: #fff; font-size: 14.5px; font-weight: 600;
+    transition: background .15s, opacity .15s; width: 100%;
+  }
+  .btn:hover { background: var(--accent-2); }
+  .btn:disabled { opacity: .45; cursor: not-allowed; }
+  .btn.secondary { background: var(--panel-2); border: 1px solid var(--border); color: var(--text); }
+  .btn.danger { background: var(--red); }
+
+  .row { display: flex; gap: 12px; }
+  .row > * { flex: 1; }
+
+  .spinner {
+    width: 16px; height: 16px; border: 2px solid rgba(255,255,255,.35);
+    border-top-color: #fff; border-radius: 50%; animation: spin .8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+
+  .result { margin-top: 4px; }
+  .result .meta { font-size: 12.5px; color: var(--muted); margin-bottom: 10px; display: flex; justify-content: space-between; align-items: center; }
+  .downloads { display: flex; gap: 8px; }
+  .downloads a {
+    font-size: 12.5px; color: var(--accent); text-decoration: none;
+    padding: 5px 12px; border: 1px solid var(--border); border-radius: 6px; background: var(--panel-2);
+  }
+  .downloads a:hover { border-color: var(--accent); }
+  textarea.output {
+    width: 100%; min-height: 220px; resize: vertical;
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); padding: 14px; font-size: 14px; line-height: 1.6;
+    font-family: inherit; outline: none;
+  }
+
+  .live-controls { display: flex; gap: 12px; align-items: center; }
+  .live-controls .btn { width: auto; }
+  .rec-dot { width: 12px; height: 12px; border-radius: 50%; background: var(--red); display: none; animation: pulse 1.2s ease-in-out infinite; }
+  .recording .rec-dot { display: inline-block; }
+  @keyframes pulse { 50% { opacity: .3; } }
+  .timer { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 14px; }
+
+  .error-box {
+    display: none; background: rgba(248,81,73,.1); border: 1px solid rgba(248,81,73,.4);
+    color: var(--red); padding: 12px 16px; border-radius: 8px; font-size: 13.5px; margin-bottom: 14px;
+  }
+  .hint { font-size: 12.5px; color: var(--muted); margin-top: 10px; line-height: 1.5; }
+  .hint code { background: var(--panel-2); padding: 1px 6px; border-radius: 4px; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>🎙️ Transcriber</h1>
+  <p>Transcrição 100% local com Whisper large-v3-turbo (MLX · Apple Silicon)</p>
+  <div class="pill" id="statusPill"><span class="dot"></span><span id="statusText">Carregando modelo…</span></div>
+</header>
+
+<div class="app">
+  <div class="tabs">
+    <button class="tab active" data-pane="file">📁 Arquivo</button>
+    <button class="tab" data-pane="youtube">▶️ YouTube</button>
+    <button class="tab" data-pane="live">🔴 Tempo real</button>
+  </div>
+
+  <div class="error-box" id="errorBox"></div>
+
+  <!-- ARQUIVO -->
+  <section class="pane active" id="pane-file">
+    <div class="card">
+      <div class="dropzone" id="dropzone">
+        <div>Arraste um arquivo de áudio ou vídeo aqui<br><small>ou clique para escolher — mp3, wav, m4a, mp4, mkv…</small></div>
+        <div class="filename" id="fileName"></div>
+        <input type="file" id="fileInput" accept="audio/*,video/*" hidden />
+      </div>
+      <div class="row" style="margin-top:16px">
+        <div>
+          <label>Idioma</label>
+          <select id="fileLang">
+            <option value="auto">Detectar automaticamente</option>
+            <option value="pt">Português</option>
+            <option value="en">Inglês</option>
+            <option value="es">Espanhol</option>
+            <option value="fr">Francês</option>
+            <option value="de">Alemão</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="btn" id="fileBtn" disabled>Transcrever</button>
+        </div>
+      </div>
+    </div>
+    <div class="card result" id="fileResult" style="display:none">
+      <div class="meta">
+        <span id="fileMeta"></span>
+        <span class="downloads">
+          <a id="fileTxt" download="transcricao.txt">⬇ .txt</a>
+          <a id="fileSrt" download="transcricao.srt">⬇ .srt</a>
+        </span>
+      </div>
+      <textarea class="output" id="fileOut" readonly></textarea>
+    </div>
+  </section>
+
+  <!-- YOUTUBE -->
+  <section class="pane" id="pane-youtube">
+    <div class="card">
+      <label>Link do vídeo</label>
+      <input type="url" id="ytUrl" placeholder="https://www.youtube.com/watch?v=…" />
+      <div class="row" style="margin-top:16px">
+        <div>
+          <label>Idioma</label>
+          <select id="ytLang">
+            <option value="auto">Detectar automaticamente</option>
+            <option value="pt">Português</option>
+            <option value="en">Inglês</option>
+            <option value="es">Espanhol</option>
+            <option value="fr">Francês</option>
+            <option value="de">Alemão</option>
+          </select>
+        </div>
+        <div style="display:flex;align-items:flex-end">
+          <button class="btn" id="ytBtn">Baixar e transcrever</button>
+        </div>
+      </div>
+      <p class="hint">O áudio é extraído com <code>yt-dlp</code> e transcrito localmente — nada sai da sua máquina depois do download.</p>
+    </div>
+    <div class="card result" id="ytResult" style="display:none">
+      <div class="meta">
+        <span id="ytMeta"></span>
+        <span class="downloads">
+          <a id="ytTxt" download="transcricao.txt">⬇ .txt</a>
+          <a id="ytSrt" download="transcricao.srt">⬇ .srt</a>
+        </span>
+      </div>
+      <textarea class="output" id="ytOut" readonly></textarea>
+    </div>
+  </section>
+
+  <!-- TEMPO REAL -->
+  <section class="pane" id="pane-live">
+    <div class="card" id="liveCard">
+      <div class="row" style="align-items:flex-end">
+        <div>
+          <label>Idioma</label>
+          <select id="liveLang">
+            <option value="pt">Português</option>
+            <option value="auto">Detectar automaticamente</option>
+            <option value="en">Inglês</option>
+            <option value="es">Espanhol</option>
+          </select>
+        </div>
+        <div class="live-controls" style="flex:1.4; justify-content:flex-end">
+          <span class="rec-dot"></span>
+          <span class="timer" id="liveTimer">00:00</span>
+          <button class="btn" id="liveStartBtn">● Iniciar gravação</button>
+          <button class="btn danger" id="liveStopBtn" style="display:none">■ Parar</button>
+        </div>
+      </div>
+      <p class="hint">Captura o microfone em tempo real. Para gravar <strong>reuniões</strong> (áudio do sistema + microfone), instale o <code>BlackHole</code> (<code>brew install blackhole-2ch</code>) e crie um dispositivo agregado no “Configuração de Áudio e MIDI”.</p>
+    </div>
+    <div class="card result" id="liveResult" style="display:none">
+      <div class="meta">
+        <span>Transcrição ao vivo</span>
+        <span class="downloads">
+          <a id="liveTxt" download="transcricao-ao-vivo.txt">⬇ .txt</a>
+        </span>
+      </div>
+      <textarea class="output" id="liveOut" readonly></textarea>
+    </div>
+  </section>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+// ---------- status do modelo ----------
+async function pollStatus() {
+  try {
+    const r = await fetch("/api/status");
+    const s = await r.json();
+    const pill = $("statusPill"), txt = $("statusText");
+    if (s.loaded) {
+      pill.classList.add("ready");
+      txt.textContent = "Modelo pronto · " + s.model.split("/").pop();
+      return;
+    }
+    if (s.error) {
+      pill.classList.add("error");
+      txt.textContent = "Erro ao carregar: " + s.error;
+      return;
+    }
+    setTimeout(pollStatus, 1500);
+  } catch { setTimeout(pollStatus, 3000); }
+}
+pollStatus();
+
+// ---------- abas ----------
+document.querySelectorAll(".tab").forEach(t => {
+  t.addEventListener("click", () => {
+    document.querySelectorAll(".tab").forEach(x => x.classList.remove("active"));
+    document.querySelectorAll(".pane").forEach(x => x.classList.remove("active"));
+    t.classList.add("active");
+    $("pane-" + t.dataset.pane).classList.add("active");
+  });
+});
+
+function showError(msg) {
+  const box = $("errorBox");
+  box.textContent = msg;
+  box.style.display = "block";
+  clearTimeout(box._t);
+  box._t = setTimeout(() => (box.style.display = "none"), 8000);
+}
+
+function setBusy(btn, busy, labelBusy = "Transcrevendo…") {
+  if (busy) {
+    btn.dataset.label = btn.textContent;
+    btn.innerHTML = '<span class="spinner"></span> ' + labelBusy;
+    btn.disabled = true;
+  } else {
+    btn.textContent = btn.dataset.label;
+    btn.disabled = false;
+  }
+}
+
+function fillResult(prefix, data) {
+  $(prefix + "Result").style.display = "block";
+  $(prefix + "Out").value = data.text;
+  $(prefix + "Meta").textContent =
+    "Idioma detectado: " + (data.language || "?") + " · " + data.text.split(/\s+/).length + " palavras";
+  $(prefix + "Txt").href = URL.createObjectURL(new Blob([data.text], { type: "text/plain" }));
+  $(prefix + "Srt").href = URL.createObjectURL(new Blob([data.srt], { type: "text/plain" }));
+}
+
+// ---------- arquivo ----------
+const dz = $("dropzone"), fi = $("fileInput");
+let selectedFile = null;
+dz.addEventListener("click", () => fi.click());
+dz.addEventListener("dragover", e => { e.preventDefault(); dz.classList.add("drag"); });
+dz.addEventListener("dragleave", () => dz.classList.remove("drag"));
+dz.addEventListener("drop", e => {
+  e.preventDefault(); dz.classList.remove("drag");
+  if (e.dataTransfer.files.length) pickFile(e.dataTransfer.files[0]);
+});
+fi.addEventListener("change", () => fi.files.length && pickFile(fi.files[0]));
+function pickFile(f) {
+  selectedFile = f;
+  $("fileName").textContent = f.name + " · " + (f.size / 1e6).toFixed(1) + " MB";
+  $("fileBtn").disabled = false;
+}
+$("fileBtn").addEventListener("click", async () => {
+  if (!selectedFile) return;
+  const btn = $("fileBtn");
+  setBusy(btn, true);
+  try {
+    const fd = new FormData();
+    fd.append("file", selectedFile);
+    fd.append("language", $("fileLang").value);
+    const r = await fetch("/api/transcribe/file", { method: "POST", body: fd });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Erro na transcrição");
+    fillResult("file", data);
+  } catch (e) { showError(e.message); }
+  finally { setBusy(btn, false); }
+});
+
+// ---------- youtube ----------
+$("ytBtn").addEventListener("click", async () => {
+  const url = $("ytUrl").value.trim();
+  if (!url) return showError("Cole um link do YouTube.");
+  const btn = $("ytBtn");
+  setBusy(btn, true, "Baixando e transcrevendo…");
+  try {
+    const r = await fetch("/api/transcribe/youtube", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url, language: $("ytLang").value }),
+    });
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || "Erro na transcrição");
+    fillResult("yt", data);
+  } catch (e) { showError(e.message); }
+  finally { setBusy(btn, false); }
+});
+
+// ---------- tempo real ----------
+let mediaRecorder = null, liveWs = null, liveStart = 0, timerInt = null;
+let liveText = "";
+
+function fmtTime(s) {
+  return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+}
+
+$("liveStartBtn").addEventListener("click", async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const proto = location.protocol === "https:" ? "wss" : "ws";
+    liveWs = new WebSocket(`${proto}://${location.host}/ws/live?language=${$("liveLang").value}`);
+    liveText = "";
+    $("liveOut").value = "";
+    $("liveResult").style.display = "block";
+
+    liveWs.onmessage = (ev) => {
+      const msg = JSON.parse(ev.data);
+      if (msg.type === "append") {
+        liveText += (liveText ? " " : "") + msg.text;
+        $("liveOut").value = liveText;
+        $("liveOut").scrollTop = $("liveOut").scrollHeight;
+        $("liveTxt").href = URL.createObjectURL(new Blob([liveText], { type: "text/plain" }));
+      }
+    };
+
+    await new Promise((res, rej) => {
+      liveWs.onopen = res;
+      liveWs.onerror = () => rej(new Error("Falha na conexão WebSocket"));
+    });
+
+    mediaRecorder = new MediaRecorder(stream, { mimeType: "audio/webm;codecs=opus" });
+    mediaRecorder.ondataavailable = (e) => {
+      if (e.data.size > 0 && liveWs.readyState === WebSocket.OPEN) liveWs.send(e.data);
+    };
+    mediaRecorder.start(500);
+
+    liveStart = Date.now();
+    timerInt = setInterval(() => $("liveTimer").textContent = fmtTime((Date.now() - liveStart) / 1000), 500);
+    $("liveCard").classList.add("recording");
+    $("liveStartBtn").style.display = "none";
+    $("liveStopBtn").style.display = "inline-flex";
+  } catch (e) {
+    showError(e.message || "Não foi possível acessar o microfone.");
+  }
+});
+
+$("liveStopBtn").addEventListener("click", () => {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") mediaRecorder.stop();
+  mediaRecorder?.stream.getTracks().forEach(t => t.stop());
+  if (liveWs && liveWs.readyState === WebSocket.OPEN) liveWs.send(JSON.stringify({ type: "stop" }));
+  clearInterval(timerInt);
+  $("liveCard").classList.remove("recording");
+  $("liveStartBtn").style.display = "inline-flex";
+  $("liveStopBtn").style.display = "none";
+});
+</script>
+</body>
+</html>
