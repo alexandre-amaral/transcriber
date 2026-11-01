@@ -1,104 +1,100 @@
-# 🎙️ Transcriber
+# Transcriber
 
-Transcrição de áudio **100% local** para macOS (Apple Silicon), com interface web.
-Sem nuvem, sem API keys, sem custo por minuto — o áudio nunca sai da sua máquina.
+Fully local audio transcription for macOS (Apple Silicon), with a web UI.
+No cloud, no API keys — audio never leaves your machine.
 
 ## Features
 
-- 📁 **Arquivos** — arraste qualquer áudio/vídeo (mp3, wav, m4a, mp4, mkv…)
-- ▶️ **YouTube** — cole o link, o áudio é extraído com `yt-dlp` e transcrito
-- 🔴 **Tempo real** — transcrição ao vivo do microfone via WebSocket
-- 🌎 **99 idiomas** com detecção automática (Whisper large-v3-turbo)
-- ⬇️ Exporta `.txt` e `.srt` (legendas com timestamps)
-- ⚡ Roda no GPU via **MLX/Metal** — ~20–30x tempo real num M5
+- File upload — drag and drop any audio/video file (mp3, wav, m4a, mp4, mkv…)
+- YouTube — paste a link, audio is extracted with yt-dlp and transcribed
+- Real time — live microphone transcription over WebSocket
+- 99 languages with automatic detection (Whisper large-v3-turbo)
+- Export as `.txt` and `.srt`
+- Runs on GPU via MLX/Metal — roughly 20–30x real time on an M5
 
 ## Stack
 
-| Componente | Uso |
+| Component | Purpose |
 |---|---|
-| [mlx-whisper](https://github.com/ml-explore/mlx-examples) | Whisper `large-v3-turbo` otimizado p/ Apple Silicon |
-| FastAPI + Uvicorn | Backend e WebSocket |
-| yt-dlp | Extração de áudio de links do YouTube |
-| ffmpeg | Conversão de formatos e decodificação do stream |
+| [mlx-whisper](https://github.com/ml-explore/mlx-examples) | Whisper `large-v3-turbo` optimized for Apple Silicon |
+| FastAPI + Uvicorn | HTTP backend and WebSocket |
+| yt-dlp | Audio extraction from YouTube links |
+| ffmpeg | Format conversion and stream decoding |
 
 ## Setup
 
-### Pré-requisitos
-
-- macOS com Apple Silicon (M1 ou superior)
-- [Homebrew](https://brew.sh)
+Prerequisites: macOS on Apple Silicon and [Homebrew](https://brew.sh).
 
 ```bash
 brew install ffmpeg yt-dlp uv
-```
 
-### Instalação
-
-```bash
 git clone https://github.com/alexandre-amaral/transcriber.git
 cd transcriber
 
-# cria o ambiente virtual e instala as dependências
 uv venv .venv --python 3.12
 uv pip install --python .venv/bin/python \
   mlx-whisper fastapi "uvicorn[standard]" python-multipart websockets
 ```
 
-> Sem `uv`, o clássico também funciona:
-> `python3 -m venv .venv && ./.venv/bin/pip install mlx-whisper fastapi "uvicorn[standard]" python-multipart websockets`
+Without `uv`:
 
-### Rodar
+```bash
+python3 -m venv .venv
+./.venv/bin/pip install mlx-whisper fastapi "uvicorn[standard]" python-multipart websockets
+```
+
+## Run
 
 ```bash
 npm run dev
-# ou diretamente:
+# or directly:
 ./.venv/bin/python server.py --port 7100
 ```
 
-Abra **http://localhost:7100** no navegador.
+Open http://localhost:7100. On first run the model (~1.5 GB) is downloaded from
+Hugging Face and cached in `~/.cache/huggingface`. The status indicator at the
+top of the page shows when it is ready.
 
-Na primeira execução o modelo (~1,5 GB) é baixado do Hugging Face e fica em cache em `~/.cache/huggingface`. O indicador no topo da página mostra quando ele está pronto.
+## Usage
 
-## Uso
+- **File** — drop a file, pick a language (or auto-detect), transcribe, download `.txt`/`.srt`.
+- **YouTube** — paste a video URL and transcribe. Works with any yt-dlp supported link.
+- **Live** — start recording and speak; text appears in ~4-second windows.
 
-### Arquivo
-Arraste um arquivo para a área pontilhada, escolha o idioma (ou deixe em "Detectar automaticamente") e clique em **Transcrever**. O resultado pode ser baixado em `.txt` ou `.srt`.
-
-### YouTube
-Cole o link do vídeo e clique em **Baixar e transcrever**. Funciona com qualquer link suportado pelo `yt-dlp`.
-
-### Tempo real
-Clique em **Iniciar gravação** e fale. A transcrição aparece em janelas de ~4 segundos.
-
-**Para gravar reuniões (sua voz + áudio dos outros participantes):**
+To capture meetings (your mic plus other participants' audio):
 
 ```bash
 brew install blackhole-2ch
 ```
 
-Depois abra o app **Configuração de Áudio e MIDI** do macOS, crie um *dispositivo agregado* combinando seu microfone + BlackHole, e selecione esse dispositivo como entrada (nas Preferências de Som ou pelo seletor do navegador).
+Then open macOS **Audio MIDI Setup**, create an aggregate device combining your
+microphone and BlackHole, and select it as the input device.
 
-## Configuração
+## Configuration
 
-| Variável de ambiente | Default | Descrição |
+| Variable | Default | Description |
 |---|---|---|
-| `TRANSCRIBER_MODEL` | `mlx-community/whisper-large-v3-turbo` | Modelo do Hugging Face (ex.: `mlx-community/whisper-large-v3` para máxima qualidade) |
-| `PORT` / `HOST` | `7100` / `127.0.0.1` | Endereço do servidor |
+| `TRANSCRIBER_MODEL` | `mlx-community/whisper-large-v3-turbo` | Hugging Face model repo (e.g. `mlx-community/whisper-large-v3` for max quality) |
+| `PORT` / `HOST` | `7100` / `127.0.0.1` | Server bind address |
 
-## Estrutura
+## How live mode works
+
+The browser captures the microphone with `MediaRecorder` (webm/opus) and streams
+chunks over a WebSocket. The server decodes the accumulated stream to 16 kHz PCM
+with ffmpeg and transcribes ~4-second windows with 0.5 s of overlap, removing
+duplicated words at window boundaries. The model stays loaded in memory between
+windows, so latency stays low.
+
+## Project layout
 
 ```
 transcriber/
-├── server.py            # backend FastAPI (arquivo, YouTube, WebSocket ao vivo)
-├── static/index.html    # interface web (SPA, sem build)
-├── package.json         # npm run dev → sobe o servidor
-└── tmp/                 # arquivos temporários (limpos automaticamente)
+├── server.py            # FastAPI backend (file, YouTube, live WebSocket)
+├── static/index.html    # Web UI (single page, no build step)
+├── package.json         # npm run dev starts the server
+└── tmp/                 # temporary files (cleaned automatically)
 ```
 
-## Como funciona o modo ao vivo
-
-O navegador captura o microfone com `MediaRecorder` (webm/opus) e envia os chunks por WebSocket. O servidor acumula o stream, decodifica com ffmpeg para PCM 16 kHz e transcreve janelas de ~4 s com 0,5 s de sobreposição, removendo palavras duplicadas na junção. O modelo fica carregado em memória entre as janelas, então a latência é baixa mesmo com o modelo grande.
-
-## Licença
+## License
 
 MIT

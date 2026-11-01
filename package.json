@@ -2,7 +2,7 @@
   "name": "transcriber",
   "version": "1.0.0",
   "private": true,
-  "description": "Transcrição local com Whisper turbo (MLX) — arquivo, YouTube e tempo real",
+  "description": "Fully local transcription with Whisper turbo (MLX) — files, YouTube and real-time microphone",
   "scripts": {
     "dev": "./.venv/bin/python server.py"
   }

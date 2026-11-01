@@ -1,25 +1,22 @@
-"""Transcriber — servidor local de transcrição (Whisper turbo via MLX).
+"""Transcriber — local transcription server (Whisper turbo via MLX).
 
-Fontes: upload de arquivo, link do YouTube e microfone em tempo real.
-Uso:  python server.py [--host 127.0.0.1] [--port 7100]
+Inputs: file upload, YouTube links and real-time microphone.
+Usage: python server.py [--host 127.0.0.1] [--port 7100]
 """
 
 import argparse
 import asyncio
 import json
 import os
-import re
 import subprocess
 import sys
-import tempfile
 import threading
-import time
 import uuid
 from pathlib import Path
 
 import numpy as np
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -31,7 +28,7 @@ SAMPLE_RATE = 16000
 
 app = FastAPI(title="Transcriber")
 
-# ---------------------------------------------------------------- modelo ----
+# ------------------------------------------------------------------ model ---
 
 _model_state = {"loaded": False, "error": None, "loading": False}
 
@@ -78,7 +75,7 @@ def _run_transcribe(audio, language=None, word_timestamps=False):
     return mlx_whisper.transcribe(audio, **opts)
 
 
-# ------------------------------------------------------------------ srt -----
+# -------------------------------------------------------------------- srt ---
 
 def _fmt_ts(seconds: float) -> str:
     ms = int(round(seconds * 1000))
@@ -95,12 +92,12 @@ def _to_srt(segments) -> str:
     return "\n".join(blocks)
 
 
-# ------------------------------------------------------------- endpoints ----
+# -------------------------------------------------------------- endpoints ---
 
 @app.post("/api/transcribe/file")
 async def transcribe_file(file: UploadFile = File(...), language: str = Form("auto")):
     if not _model_state["loaded"]:
-        raise HTTPException(503, "Modelo ainda carregando, tente em alguns segundos.")
+        raise HTTPException(503, "Model still loading, try again in a few seconds.")
     suffix = Path(file.filename or "audio").suffix or ".bin"
     tmp = TMP_DIR / f"up-{uuid.uuid4().hex}{suffix}"
     try:
@@ -118,11 +115,11 @@ async def transcribe_file(file: UploadFile = File(...), language: str = Form("au
 @app.post("/api/transcribe/youtube")
 async def transcribe_youtube(payload: dict):
     if not _model_state["loaded"]:
-        raise HTTPException(503, "Modelo ainda carregando, tente em alguns segundos.")
+        raise HTTPException(503, "Model still loading, try again in a few seconds.")
     url = (payload.get("url") or "").strip()
     language = payload.get("language", "auto")
     if not url:
-        raise HTTPException(400, "URL vazia.")
+        raise HTTPException(400, "Empty URL.")
 
     job = TMP_DIR / f"yt-{uuid.uuid4().hex}"
     job.mkdir()
@@ -135,10 +132,10 @@ async def transcribe_youtube(payload: dict):
             subprocess.run, cmd, capture_output=True, text=True, timeout=1800
         )
         if proc.returncode != 0:
-            raise HTTPException(400, f"yt-dlp falhou: {proc.stderr.strip()[-400:]}")
+            raise HTTPException(400, f"yt-dlp failed: {proc.stderr.strip()[-400:]}")
         files = list(job.glob("audio.*"))
         if not files:
-            raise HTTPException(400, "Não foi possível extrair o áudio.")
+            raise HTTPException(400, "Could not extract audio.")
         result = await asyncio.to_thread(_run_transcribe, str(files[0]), language)
         return {
             "text": result["text"].strip(),
@@ -151,15 +148,15 @@ async def transcribe_youtube(payload: dict):
         job.rmdir()
 
 
-# ------------------------------------------------------------------ live ----
+# ------------------------------------------------------------------- live ---
 
-MIN_WINDOW_S = 4.0      # transcribe quando houver pelo menos isso de áudio novo
-OVERLAP_S = 0.5         # sobreposição para não cortar palavras
+MIN_WINDOW_S = 4.0      # transcribe once this much new audio has arrived
+OVERLAP_S = 0.5         # overlap so words are not cut at window edges
 POLL_S = 1.0
 
 
 def _decode_webm_to_pcm(path: Path) -> np.ndarray:
-    """Decodifica todo o webm acumulado para PCM float32 16 kHz mono."""
+    """Decode the accumulated webm stream to 16 kHz mono float32 PCM."""
     proc = subprocess.run(
         ["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", str(SAMPLE_RATE), "pipe:1"],
         capture_output=True,
@@ -170,7 +167,7 @@ def _decode_webm_to_pcm(path: Path) -> np.ndarray:
 
 
 def _dedupe_overlap(prev_words, new_words, max_k=6):
-    """Remove repetição na junção entre janelas consecutivas."""
+    """Drop words repeated at the boundary between consecutive windows."""
     k = min(max_k, len(prev_words), len(new_words))
     while k > 0:
         if [w.lower().strip(".,!?;:") for w in prev_words[-k:]] == [
@@ -209,7 +206,7 @@ async def live_ws(ws: WebSocket):
 
             start = max(0, state["processed_samples"] - int(OVERLAP_S * SAMPLE_RATE))
             window = pcm[start:total]
-            # energia muito baixa -> silêncio, pula
+            # very low energy -> silence, skip
             if float(np.sqrt(np.mean(window**2) + 1e-12)) < 0.005:
                 state["processed_samples"] = total
                 return
@@ -261,7 +258,7 @@ async def live_ws(ws: WebSocket):
             elif msg.get("text"):
                 data = json.loads(msg["text"])
                 if data.get("type") == "stop":
-                    await asyncio.sleep(0.6)  # deixa os últimos chunks chegarem
+                    await asyncio.sleep(0.6)  # let the last chunks arrive
                     await process(final=True)
                     await ws.send_json({"type": "done"})
                     break
@@ -274,7 +271,7 @@ async def live_ws(ws: WebSocket):
         session.unlink(missing_ok=True)
 
 
-# ---------------------------------------------------------------- static ----
+# ----------------------------------------------------------------- static ---
 
 @app.get("/")
 async def index():
